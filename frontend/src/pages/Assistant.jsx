@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, fmtDateTime } from "../api.js";
 import { useProject } from "../ctx.js";
+import { useLang, useT } from "../i18n.js";
 import { ErrorBox, Icon, Loading, RichText } from "../ui.jsx";
 
 const PROMPTS = [
@@ -14,6 +15,8 @@ const PROMPTS = [
 ];
 
 export default function Assistant() {
+  const t = useT();
+  const { lang } = useLang();
   const { project } = useProject();
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
@@ -45,15 +48,15 @@ export default function Assistant() {
     <>
       <div className="page-head">
         <div>
-          <h1>AI Project Assistant</h1>
-          <p>Ask anything about {project.name}. Answers come from the live task data.</p>
+          <h1>{t("AI Project Assistant")}</h1>
+          <p>{t("Ask anything about {name}. Answers come from the live task data.", { name: project.name })}</p>
         </div>
         <div className="btn-row">
           <span className={`badge ${data?.engine === "claude" ? "badge-ai" : "badge-soft"}`}>
-            {Icon.spark} {data?.engine === "claude" ? "Claude API" : "Built-in analyst (no API key set)"}
+            {Icon.spark} {data?.engine === "claude" ? "Claude API" : t("Built-in analyst (no API key set)")}
           </span>
           {data?.messages.length > 0 && (
-            <button className="btn btn-sm btn-ghost" onClick={async () => { await api(`projects/${project.id}/chat`, { method: "DELETE" }); setData({ ...data, messages: [] }); }}>Clear chat</button>
+            <button className="btn btn-sm btn-ghost" onClick={async () => { await api(`projects/${project.id}/chat`, { method: "DELETE" }); setData({ ...data, messages: [] }); }}>{t("Clear chat")}</button>
           )}
         </div>
       </div>
@@ -61,14 +64,14 @@ export default function Assistant() {
         <div className="chat-log" ref={log} aria-live="polite">
           {data?.messages.length === 0 && !pending && (
             <div className="empty">
-              <div style={{ fontSize: 18, fontWeight: 800, color: "var(--ink)", marginBottom: 6 }}>“Is this project actually on track?”</div>
-              Pick a question below or write your own — in English or Russian.
+              <div style={{ fontSize: 18, fontWeight: 800, color: "var(--ink)", marginBottom: 6 }}>{t("“Is this project actually on track?”")}</div>
+              {t("Pick a question below or write your own - in English, Russian or Kazakh.")}
             </div>
           )}
           {data?.messages.map((m) => (
             <div key={m.id} className={`msg msg-${m.role}`}>
               {m.role === "assistant" ? <RichText text={m.content} /> : m.content}
-              <div className="msg-meta">{fmtDateTime(m.created_at)}{m.role === "assistant" && ` · ${m.engine === "claude" ? "Claude" : "built-in analyst"}`}</div>
+              <div className="msg-meta">{fmtDateTime(m.created_at)}{m.role === "assistant" && ` - ${m.engine === "claude" ? "Claude" : t("built-in analyst")}`}</div>
             </div>
           ))}
           {pending && (
@@ -79,10 +82,10 @@ export default function Assistant() {
           )}
         </div>
         <ErrorBox error={err} />
-        <div className="chips">{PROMPTS.map((p) => <button key={p} className="chip" onClick={() => ask(p)} disabled={busy}>{p}</button>)}</div>
+        <div className="chips">{PROMPTS.map((p) => <button key={p} className="chip" onClick={() => ask(lang === "ru" ? t(p) : p)} disabled={busy}>{t(p)}</button>)}</div>
         <form className="chat-input" onSubmit={(e) => { e.preventDefault(); ask(text); }}>
-          <input className="input" placeholder="Ask about deadlines, workload, a person or a task key…" value={text} onChange={(e) => setText(e.target.value)} aria-label="Question" />
-          <button className="btn btn-primary" disabled={busy || !text.trim()}>{Icon.send} Ask</button>
+          <input className="input" placeholder={t("Ask about deadlines, workload, a person or a task key…")} value={text} onChange={(e) => setText(e.target.value)} aria-label={t("Question")} />
+          <button className="btn btn-primary" disabled={busy || !text.trim()}>{Icon.send} {t("Ask")}</button>
         </form>
       </section>
     </>

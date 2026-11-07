@@ -1,4 +1,7 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { useAuth } from "./ctx.js";
+import { LANGS, useLang, useT } from "./i18n.js";
 
 export const STATUSES = [
   ["todo", "To do"],
@@ -14,23 +17,27 @@ export const PRIORITIES = [
   ["lowest", "Lowest"],
 ];
 
-export function Logo({ size = 40 }) {
+export function Logo({ size = 50 }) {
+  // Figma: white rounded tile with a hand-drawn dark "P".
   return (
-    <svg className="brand-logo" width={size} height={size} viewBox="0 0 40 40" aria-hidden="true">
-      <rect width="40" height="40" rx="10" fill="#111" />
-      <path d="M14 31V9h8a7 7 0 0 1 0 14h-8" fill="none" stroke="#fff" strokeWidth="3.6" strokeLinecap="round" strokeLinejoin="round" />
+    <svg className="brand-logo" width={size} height={size} viewBox="0 0 50 50" aria-hidden="true">
+      <rect width="50" height="50" rx="12" fill="#fff" />
+      <path d="M18.5 39.5c-.6-8.4-.9-16.6-1.6-25.6" fill="none" stroke="#1d2536" strokeWidth="4.2" strokeLinecap="round" />
+      <path d="M14.2 15.6c6.6-5.2 18.6-5.6 19.6 2.2.9 6.9-7.4 9.6-14.8 8.6" fill="none" stroke="#1d2536" strokeWidth="4.2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
 
-export function Badge({ signal }) {
+export function Badge({ signal, big }) {
+  const t = useT();
   if (!signal) return null;
-  return <span className={`badge badge-${signal.state}`}>{signal.label}</span>;
+  return <span className={`badge badge-${signal.state} ${big ? "badge-lg" : ""}`}>{t(signal.label)}</span>;
 }
 
 export function Priority({ value }) {
+  const t = useT();
   const label = PRIORITIES.find((p) => p[0] === value)?.[1] || value;
-  return <span className={`prio prio-${value}`}><i />{label}</span>;
+  return <span className={`prio prio-${value}`}><i />{t(label)}</span>;
 }
 
 export function Avatar({ member, size }) {
@@ -63,13 +70,15 @@ export function Modal({ title, sub, onClose, children }) {
   );
 }
 
-export function Loading({ text = "Loading…" }) {
-  return <div className="loading"><span className="spinner" /> &nbsp;{text}</div>;
+export function Loading({ text }) {
+  const t = useT();
+  return <div className="loading"><span className="spinner" /> &nbsp;{text || t("Loading…")}</div>;
 }
 
 export function ErrorBox({ error }) {
+  const t = useT();
   if (!error) return null;
-  return <div className="alert">{String(error.message || error)}</div>;
+  return <div className="alert">{t(String(error.message || error))}</div>;
 }
 
 let toastSetter = null;
@@ -124,6 +133,9 @@ export const Icon = {
   plus: (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
   ),
+  check: (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
+  ),
   chevron: (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6" /></svg>
   ),
@@ -137,3 +149,36 @@ export const Icon = {
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 0 1-15.5 6.3L3 16" /><path d="M3 12a9 9 0 0 1 15.5-6.3L21 8" /><path d="M21 3v5h-5M3 21v-5h5" /></svg>
   ),
 };
+
+/** Log out and show the Figma "You have signed out" screen. */
+export function useLogout() {
+  const { signOut } = useAuth();
+  const nav = useNavigate();
+  return async () => { nav("/signed-out", { replace: true }); await signOut(); };
+}
+
+/** Static header used on the sign-in / sign-up / signed-out screens (Figma). */
+export function AuthHeader({ name = "ProjectPulse MVP" }) {
+  const t = useT();
+  return (
+    <header className="app-header">
+      <div className="brand">
+        <Logo />
+        <span className="brand-divider" />
+        <div className="brand-text"><small>{t("Project")}</small><strong>{name}</strong></div>
+      </div>
+      <div className="header-center" />
+      <LangSwitch />
+    </header>
+  );
+}
+
+/** Small language picker for the sign-in screens (the full one is in Personal settings). */
+export function LangSwitch() {
+  const { lang, setLang } = useLang();
+  return (
+    <select className="lang-switch" value={lang} onChange={(e) => setLang(e.target.value)} aria-label="Language">
+      {LANGS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+    </select>
+  );
+}

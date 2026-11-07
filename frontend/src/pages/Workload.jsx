@@ -2,9 +2,11 @@ import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, fmtDate } from "../api.js";
 import { useProject } from "../ctx.js";
+import { useT } from "../i18n.js";
 import { Avatar, Badge, ErrorBox, Loading, toast } from "../ui.jsx";
 
 export default function Workload() {
+  const t = useT();
   const { project, version, bump } = useProject();
   const [d, setD] = useState(null);
   const [err, setErr] = useState(null);
@@ -24,7 +26,7 @@ export default function Workload() {
   async function reassign(task, memberId) {
     const target = d.rows.find((r) => r.member === Number(memberId));
     await api(`tasks/${task.id}`, { method: "PATCH", body: { owner: Number(memberId) } });
-    toast(`${task.key} moved to ${target.name}`);
+    toast(t("{key} moved to {s}", { key: task.key, s: target.name }));
     bump();
     load();
   }
@@ -33,17 +35,17 @@ export default function Workload() {
     <>
       <div className="page-head">
         <div>
-          <h1>Team workload</h1>
-          <p>Open tasks per member. More than {d.limit} open tasks is shown as “above limit”. Click a member to see and move their tasks.</p>
+          <h1>{t("Team workload")}</h1>
+          <p>{t("Open tasks per member. More than {n} open tasks is shown as “above limit”. Click a member to see and move their tasks.", { n: d.limit })}</p>
         </div>
         <label className="small" style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          <input type="checkbox" checked={onlyOpen} onChange={(e) => setOnlyOpen(e.target.checked)} /> Only people with open tasks
+          <input type="checkbox" checked={onlyOpen} onChange={(e) => setOnlyOpen(e.target.checked)} /> {t("Only people with open tasks")}
         </label>
       </div>
       <div className={`banner ${over.length ? "" : "banner-ok"}`} style={{ marginTop: 0, marginBottom: 16 }}>
         {over.length
-          ? <><b>{over.length} member{over.length !== 1 ? "s are" : " is"} above the limit:</b> {over.slice(0, 5).map((r) => r.name).join(", ")}{over.length > 5 ? "…" : ""}</>
-          : <b>Nobody is above the limit. Work is shared fairly.</b>}
+          ? <><b>{t("Above the limit ({n}):", { n: over.length })}</b> {over.slice(0, 5).map((r) => r.name).join(", ")}{over.length > 5 ? "…" : ""}</>
+          : <b>{t("Nobody is above the limit. Work is shared fairly.")}</b>}
       </div>
       <div className="card">
         {rows.map((r) => (
@@ -54,26 +56,26 @@ export default function Workload() {
                 <span className="who"><Avatar member={{ ...r }} /><span className="wl-name">{r.name}</span>
                   {r.role && <span className="muted small hide-sm">{r.role}</span>}</span>
                 <span className="wl-count">
-                  <span className="muted small hide-sm" style={{ marginRight: 10 }}>{r.todo} to do · {r.in_progress} in progress · {r.review} review</span>
-                  {r.late > 0 && <span className="badge badge-at_risk" style={{ marginRight: 8 }}>{r.late} late</span>}
-                  <b>{r.open} open</b>{r.above_limit && " · above limit"}
+                  <span className="muted small hide-sm" style={{ marginRight: 10 }}>{t("{a} to do - {b} in progress - {c} review", { a: r.todo, b: r.in_progress, c: r.review })}</span>
+                  {r.late > 0 && <span className="badge badge-at_risk" style={{ marginRight: 8 }}>{t("{n} late", { n: r.late })}</span>}
+                  <b>{t("{n} open", { n: r.open })}</b>{r.above_limit && " - " + t("above limit")}
                 </span>
               </div>
               <div className={`wl-bar ${r.above_limit ? "over" : ""}`}><span style={{ width: `${(100 * r.open) / max}%` }} /></div>
             </button>
             {openId === String(r.member) && (
               <div style={{ padding: "8px 0 12px 34px" }}>
-                {r.tasks.length === 0 && <div className="muted small">No open tasks.</div>}
-                {r.tasks.map((t) => (
-                  <div key={t.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "6px 0", flexWrap: "wrap" }}>
-                    <span className="small muted" style={{ width: 92 }}>{fmtDate(t.due_date)}</span>
-                    <Link to={`/tasks/${t.id}`} style={{ flex: 1, fontWeight: 700, minWidth: 180 }}>{t.key} {t.title}</Link>
-                    <Badge signal={t.signal} />
-                    <select className="input" style={{ width: "auto", padding: "4px 8px", fontSize: 12 }} value="" aria-label={`Move ${t.key} to another member`}
-                      onChange={(e) => e.target.value && reassign(t, e.target.value)}>
-                      <option value="">Move to…</option>
+                {r.tasks.length === 0 && <div className="muted small">{t("No open tasks.")}</div>}
+                {r.tasks.map((task) => (
+                  <div key={task.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "6px 0", flexWrap: "wrap" }}>
+                    <span className="small muted" style={{ width: 92 }}>{fmtDate(task.due_date)}</span>
+                    <Link to={`/tasks/${task.id}`} style={{ flex: 1, fontWeight: 700, minWidth: 180 }}>{task.key} {task.title}</Link>
+                    <Badge signal={task.signal} />
+                    <select className="input" style={{ width: "auto", padding: "4px 8px", fontSize: 12 }} value="" aria-label={t("Move {key} to another member", { key: task.key })}
+                      onChange={(e) => e.target.value && reassign(task, e.target.value)}>
+                      <option value="">{t("Move to…")}</option>
                       {d.rows.filter((x) => x.member !== r.member).sort((a, b) => a.open - b.open).slice(0, 30).map((x) => (
-                        <option key={x.member} value={x.member}>{x.name} ({x.open} open)</option>
+                        <option key={x.member} value={x.member}>{x.name} ({t("{n} open", { n: x.open })})</option>
                       ))}
                     </select>
                   </div>

@@ -16,13 +16,14 @@ from core.jira_import import JiraError, import_project
 from core.models import Activity, Member, Project, Subtask, Task
 
 DEMO_PASSWORD = "pulse2026"
+LEADS = {"sagynysh"}  # team lead accounts: create projects and tasks, delete projects
 
 TEAM = [
     # username, name, role, color
-    ("aisha", "Aisha", "Product Owner · UX", "#6D86B1"),
-    ("talshyn", "Talshyn", "Scrum Master · Frontend", "#06B57C"),
+    ("aisha", "Aisha", "Product Owner - UX", "#6D86B1"),
+    ("talshyn", "Talshyn", "Scrum Master - Frontend", "#06B57C"),
     ("marzhan", "Marzhan", "Backend Developer", "#D35268"),
-    ("ayaulym", "Ayaulym", "AI Developer · Deployment", "#8B6CC1"),
+    ("ayaulym", "Ayaulym", "AI Developer - Deployment", "#8B6CC1"),
     ("sagynysh", "Sagynysh", "Coordination Lead", "#E0A526"),
 ]
 
@@ -99,8 +100,12 @@ class Command(BaseCommand):
             user, created = User.objects.get_or_create(username=username)
             if created:
                 user.set_password(DEMO_PASSWORD)
-                user.save()
-            m, _ = Member.objects.update_or_create(user=user, defaults={"name": name, "role": role, "color": color})
+            if not user.email:
+                user.email = f"{username}@example.com"  # sign in with email (Figma login screen)
+            user.save()
+            m, _ = Member.objects.update_or_create(
+                user=user, defaults={"name": name, "role": role, "color": color, "is_lead": username in LEADS}
+            )
             members[username] = m
         admin, created = User.objects.get_or_create(username="admin", defaults={"is_staff": True, "is_superuser": True})
         if created:
@@ -121,6 +126,8 @@ class Command(BaseCommand):
             },
         )
         p.members.set(members.values())
+        team_users = [m.user for m in members.values()] + [admin]
+        p.viewers.add(*team_users)  # our accounts see the seeded projects; new accounts start empty
         by_key = {}
         for key, title, owner, due, st, prio, typ, hours, deps, desc in TASKS:
             created_on = date(2026, 9, 15) if due.month == 9 else date(2026, 10, 1)
@@ -144,10 +151,13 @@ class Command(BaseCommand):
                 Subtask.objects.bulk_create([Subtask(task=t, title=s, done=done) for s, done in items])
         self.stdout.write(self.style.SUCCESS(f"PP: {len(by_key)} team tasks, {len(members)} members"))
 
+        for jp in Project.objects.filter(source="apache_jira"):
+            jp.viewers.add(*team_users)
         if opts["offline"]:
             return
         for key in [k.strip() for k in opts["projects"].split(",") if k.strip()]:
             try:
-                import_project(key, max_issues=opts["max_issues"], log=lambda msg: self.stdout.write(self.style.SUCCESS(msg)))
+                jp = import_project(key, max_issues=opts["max_issues"], log=lambda msg: self.stdout.write(self.style.SUCCESS(msg)))
+                jp.viewers.add(*team_users)
             except JiraError as exc:
                 self.stdout.write(self.style.WARNING(f"{key}: {exc}"))

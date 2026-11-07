@@ -10,6 +10,7 @@ class Member(models.Model):
         settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="member"
     )
     role = models.CharField(max_length=60, blank=True)
+    is_lead = models.BooleanField(default=False, help_text="Team lead: can create projects and tasks and delete projects.")
     jira_name = models.CharField(max_length=120, blank=True, db_index=True)
     color = models.CharField(max_length=9, default="#6D86B1")
 
@@ -36,6 +37,10 @@ class Project(models.Model):
     source_url = models.URLField(blank=True)
     workload_limit = models.PositiveSmallIntegerField(default=3)
     members = models.ManyToManyField(Member, related_name="projects", blank=True)
+    viewers = models.ManyToManyField(
+        "auth.User", related_name="visible_projects", blank=True,
+        help_text="Accounts that see this project (besides its members). New accounts start with no projects.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     last_synced = models.DateTimeField(null=True, blank=True)
     next_task_number = models.PositiveIntegerField(default=1)

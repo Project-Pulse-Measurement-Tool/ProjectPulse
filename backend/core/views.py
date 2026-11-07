@@ -4,7 +4,8 @@ from datetime import timedelta
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from django.db import IntegrityError, transaction
-from django.db.models import Prefetch
+from django.db.models import Prefetch, Q
+from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_date
@@ -19,6 +20,38 @@ from .jira_import import KNOWN_PROJECTS, JiraError, color_for, import_project
 from .models import Activity, ChatMessage, Comment, Member, Notification, Project, Subtask, Task
 
 # ---------------------------------------------------------------- helpers
+
+
+def is_lead(user):
+    """Team leads (and Django staff) can create projects and tasks and delete projects."""
+    if user.is_staff or user.is_superuser:
+        return True
+    m = getattr(user, "member", None)
+    return bool(m and m.is_lead)
+
+
+def lead_only(request, what):
+    if is_lead(request.user):
+        return None
+    return Response({"detail": f"Only the team lead can {what}.", "code": "lead_only"}, status=403)
+
+
+def visible_projects(user):
+    """A new account sees nothing until it creates a project or a team lead adds it."""
+    if user.is_staff or user.is_superuser:
+        return Project.objects.all()
+    return Project.objects.filter(Q(viewers=user) | Q(members__user=user)).distinct()
+
+
+def get_project(request, pk):
+    return get_object_or_404(visible_projects(request.user), pk=pk)
+
+
+def get_task(request, pk, qs=None):
+    t = get_object_or_404(qs if qs is not None else Task.objects.select_related("project", "owner"), pk=pk)
+    if not visible_projects(request.user).filter(pk=t.project_id).exists():
+        raise Http404
+    return t
 
 
 def load(project):
@@ -54,7 +87,7 @@ def sync_notifications(project, tasks, snap):
 
 def member_json(m):
     return {"id": m.id, "name": m.name, "initials": m.initials, "color": m.color, "role": m.role,
-            "has_login": m.user_id is not None}
+            "is_lead": m.is_lead, "has_login": m.user_id is not None}
 
 
 def task_json(t, snap, members, full=False):
@@ -140,28 +173,49 @@ def actor(request):
 
 def me_json(user):
     m = getattr(user, "member", None)
-    return {"username": user.username, "member": member_json(m) if m else None}
+    return {"username": user.username, "email": user.email, "is_lead": is_lead(user),
+            "member": member_json(m) if m else None}
 
 
 # ---------------------------------------------------------------- auth
 
 
+def _password_ok(pw):
+    return len(pw) >= 8 and any(c.isdigit() for c in pw)
+
+
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def register(request):
+    """Figma sign-up: full name, email, password, role (Team lead / Team member)."""
+    email = (request.data.get("email") or "").strip().lower()
     username = (request.data.get("username") or "").strip().lower()
     password = request.data.get("password") or ""
     name = (request.data.get("name") or "").strip()
-    if len(username) < 3 or len(password) < 6 or not name:
-        return Response({"detail": "Name, a username of 3+ characters and a password of 6+ characters are required."}, status=400)
-    if User.objects.filter(username=username).exists():
+    if not name:
+        return Response({"detail": "Write your full name.", "errors": {"name": "Write your full name."}}, status=400)
+    if email and ("@" not in email or "." not in email.split("@")[-1]):
+        return Response({"detail": "Write a valid email.", "errors": {"email": "Write a valid email."}}, status=400)
+    if not email and len(username) < 3:
+        return Response({"detail": "An email is required.", "errors": {"email": "An email is required."}}, status=400)
+    if not _password_ok(password):
+        msg = "At least 8 characters, with one number."
+        return Response({"detail": msg, "errors": {"password": msg}}, status=400)
+    if email and User.objects.filter(email__iexact=email).exists():
+        return Response({"detail": "An account with this email already exists.", "errors": {"email": "This email is already registered."}}, status=400)
+    if not username:
+        base = "".join(c for c in email.split("@")[0] if c.isalnum() or c in "._-")[:30] or "user"
+        username, n = base, 1
+        while User.objects.filter(username=username).exists():
+            n += 1
+            username = f"{base}{n}"
+    elif User.objects.filter(username=username).exists():
         return Response({"detail": "This username is taken."}, status=400)
     with transaction.atomic():
-        user = User.objects.create_user(username=username, password=password)
-        member = Member.objects.create(name=name, user=user, role=request.data.get("role") or "Team member", color=color_for(name))
-        demo = Project.objects.filter(key="PP").first()
-        if demo:
-            demo.members.add(member)
+        user = User.objects.create_user(username=username, email=email, password=password)
+        role = (request.data.get("role") or "Team member").strip()[:60]
+        Member.objects.create(name=name, user=user, role=role, is_lead=role.lower() == "team lead", color=color_for(name))
+        # No project is shared with a new account: the app opens in an empty state.
     token, _ = Token.objects.get_or_create(user=user)
     return Response({"token": token.key, "user": me_json(user)}, status=201)
 
@@ -169,16 +223,62 @@ def register(request):
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def login(request):
-    user = authenticate(username=(request.data.get("username") or "").strip().lower(), password=request.data.get("password") or "")
+    """Sign in with an email or a username."""
+    ident = (request.data.get("email") or request.data.get("username") or "").strip().lower()
+    password = request.data.get("password") or ""
+    username = ident
+    if "@" in ident:
+        u = User.objects.filter(email__iexact=ident).first()
+        username = u.username if u else ident
+    user = authenticate(username=username, password=password)
     if not user:
-        return Response({"detail": "Wrong username or password."}, status=400)
+        return Response({"detail": "Wrong email or password."}, status=400)
     token, _ = Token.objects.get_or_create(user=user)
     return Response({"token": token.key, "user": me_json(user)})
 
 
-@api_view(["GET"])
+@api_view(["GET", "PATCH"])
 def me(request):
-    return Response(me_json(request.user))
+    """Personal settings: full name, email, role in team, password."""
+    user = request.user
+    if request.method == "PATCH":
+        d = request.data
+        errors = {}
+        m = getattr(user, "member", None)
+        if "email" in d:
+            email = (d.get("email") or "").strip().lower()
+            if email and "@" not in email:
+                errors["email"] = "Write a valid email."
+            elif email and User.objects.filter(email__iexact=email).exclude(pk=user.pk).exists():
+                errors["email"] = "This email is already used by another account."
+        if "name" in d and not (d.get("name") or "").strip():
+            errors["name"] = "Write your full name."
+        if d.get("password") and not _password_ok(d["password"]):
+            errors["password"] = "At least 8 characters, with one number."
+        if errors:
+            return Response({"detail": "Changes not saved.", "errors": errors}, status=400)
+        if "email" in d:
+            user.email = (d.get("email") or "").strip().lower()
+        if d.get("password"):
+            user.set_password(d["password"])
+        user.save()
+        if d.get("password"):
+            Token.objects.filter(user=user).delete()
+            token = Token.objects.create(user=user)
+        if m is None and (d.get("name") or "").strip():
+            m = Member.objects.create(name=d["name"].strip(), user=user, color=color_for(d["name"]))
+        if m is not None:
+            if "name" in d:
+                m.name = d["name"].strip()
+                m.color = m.color or color_for(m.name)
+            if "role" in d:
+                m.role = (d.get("role") or "").strip()[:60]
+            m.save()
+        data = me_json(user)
+        if d.get("password"):
+            data["token"] = token.key
+        return Response(data)
+    return Response(me_json(user))
 
 
 @api_view(["POST"])
@@ -193,6 +293,9 @@ def logout(request):
 @api_view(["GET", "POST"])
 def projects(request):
     if request.method == "POST":
+        denied = lead_only(request, "create projects")
+        if denied:
+            return denied
         d = request.data
         key = (d.get("key") or "").strip().upper()
         name = (d.get("name") or "").strip()
@@ -202,29 +305,44 @@ def projects(request):
             return Response({"detail": "A project with this key already exists."}, status=400)
         p = Project.objects.create(
             key=key, name=name, description=d.get("description", ""), goal=d.get("goal", ""),
-            workload_limit=int(d.get("workload_limit") or 3),
+            workload_limit=_parse_int(d.get("workload_limit"), 3, 1, 50),
         )
+        p.viewers.add(request.user)
         if getattr(request.user, "member", None):
             p.members.add(request.user.member)
         return Response(project_json(p, load(p)[2]), status=201)
     out = []
-    for p in Project.objects.all():
+    for p in visible_projects(request.user):
         out.append(project_json(p, load(p)[2]))
     return Response(out)
 
 
 @api_view(["GET", "PATCH", "DELETE"])
 def project_detail(request, pk):
-    p = get_object_or_404(Project, pk=pk)
+    p = get_project(request, pk)
     if request.method == "DELETE":
+        denied = lead_only(request, "delete a project")
+        if denied:
+            return denied
         p.delete()
         return Response(status=204)
     if request.method == "PATCH":
-        for f in ("name", "description", "goal"):
-            if f in request.data:
-                setattr(p, f, request.data[f])
-        if "workload_limit" in request.data:
-            p.workload_limit = max(1, int(request.data["workload_limit"]))
+        d = request.data
+        if "name" in d and not (d.get("name") or "").strip():
+            return Response({"detail": "The project needs a name.", "errors": {"name": "Write a name."}}, status=400)
+        limit = None
+        if "workload_limit" in d:
+            limit = _parse_int(d["workload_limit"], None, 1, 50)
+            if limit is None:
+                return Response({"detail": "Workload limit must be a whole number from 1 to 50.",
+                                 "errors": {"workload_limit": "Use a whole number from 1 to 50."}}, status=400)
+        if "name" in d:
+            p.name = d["name"].strip()[:120]
+        for f in ("description", "goal"):
+            if f in d:
+                setattr(p, f, d.get(f) or "")
+        if limit is not None:
+            p.workload_limit = limit
         p.save()
     tasks, members, snap = load(p)
     data = project_json(p, snap)
@@ -234,12 +352,15 @@ def project_detail(request, pk):
 
 @api_view(["GET"])
 def jira_catalog(request):
-    imported = set(Project.objects.filter(source="apache_jira").values_list("key", flat=True))
+    imported = set(visible_projects(request.user).filter(source="apache_jira").values_list("key", flat=True))
     return Response([{"key": k, "name": v, "imported": k in imported} for k, v in KNOWN_PROJECTS.items()])
 
 
 @api_view(["POST"])
 def jira_import(request):
+    denied = lead_only(request, "import projects")
+    if denied:
+        return denied
     key = (request.data.get("key") or "").strip().upper()
     if not key.isalnum():
         return Response({"detail": "Enter an Apache Jira project key, for example KAFKA."}, status=400)
@@ -247,12 +368,13 @@ def jira_import(request):
         p = import_project(key, max_issues=int(request.data.get("max_issues") or 250), log=lambda *_: None)
     except JiraError as exc:
         return Response({"detail": str(exc)}, status=502)
+    p.viewers.add(request.user)
     return Response(project_json(p, load(p)[2]), status=201)
 
 
 @api_view(["POST"])
 def project_sync(request, pk):
-    p = get_object_or_404(Project, pk=pk)
+    p = get_project(request, pk)
     if p.source != "apache_jira":
         return Response({"detail": "Only imported projects can be synced."}, status=400)
     try:
@@ -265,7 +387,7 @@ def project_sync(request, pk):
 
 @api_view(["GET"])
 def dashboard(request, pk):
-    p = get_object_or_404(Project, pk=pk)
+    p = get_project(request, pk)
     tasks, members, snap = load(p)
     sync_notifications(p, tasks, snap)
     ref = snap["ref"]
@@ -288,7 +410,7 @@ def dashboard(request, pk):
 
 @api_view(["GET"])
 def brief(request, pk):
-    p = get_object_or_404(Project, pk=pk)
+    p = get_project(request, pk)
     tasks, members, snap = load(p)
     return Response(rules.daily_brief(p, tasks, snap, members))
 
@@ -297,15 +419,44 @@ def brief(request, pk):
 
 
 def _parse_owner(project, value):
-    if not value:
+    """Owner must be a member of this project; bad ids return None instead of crashing."""
+    try:
+        pk = int(value)
+    except (TypeError, ValueError):
         return None
-    return Member.objects.filter(pk=value).first()
+    return project.members.filter(pk=pk).first()
+
+
+def _parse_int(value, default=None, lo=None, hi=None):
+    try:
+        n = int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+    if lo is not None and n < lo:
+        return default
+    if hi is not None and n > hi:
+        return default
+    return n
+
+
+def _parse_hours(value):
+    """'' / None -> None; a number 0..1000 -> float; anything else -> 'bad'."""
+    if value in (None, ""):
+        return None
+    try:
+        h = float(str(value).replace(",", "."))
+    except (TypeError, ValueError):
+        return "bad"
+    return round(h, 1) if 0 <= h <= 1000 else "bad"
 
 
 @api_view(["GET", "POST"])
 def project_tasks(request, pk):
-    p = get_object_or_404(Project, pk=pk)
+    p = get_project(request, pk)
     if request.method == "POST":
+        denied = lead_only(request, "create tasks")
+        if denied:
+            return denied
         d = request.data
         title = (d.get("title") or "").strip()
         owner = _parse_owner(p, d.get("owner"))
@@ -317,6 +468,9 @@ def project_tasks(request, pk):
             errors["owner"] = "Choose one owner. A task without an owner is not saved."
         if not due:
             errors["due_date"] = "Choose a deadline."
+        hours = _parse_hours(d.get("estimate_hours"))
+        if hours == "bad":
+            errors["estimate_hours"] = "Estimate must be a number of hours between 0 and 1000."
         if errors:
             return Response({"detail": "The task was not saved.", "errors": errors}, status=400)
         with transaction.atomic():
@@ -333,10 +487,10 @@ def project_tasks(request, pk):
                 status=d.get("status") if d.get("status") in dict(Task.STATUS_CHOICES) else "todo",
                 priority=d.get("priority") if d.get("priority") in dict(Task.PRIORITY_CHOICES) else "medium",
                 issue_type=d.get("issue_type") or "Task", owner=owner, due_date=due, due_source="manual",
-                estimate_hours=d.get("estimate_hours") or None, created_at=now, updated_at=now,
+                estimate_hours=hours, created_at=now, updated_at=now,
             )
-            if d.get("depends_on"):
-                t.depends_on.set(Task.objects.filter(project=p, id__in=d["depends_on"]))
+            if isinstance(d.get("depends_on"), list):
+                t.depends_on.set(Task.objects.filter(project=p, id__in=[i for i in d["depends_on"] if str(i).isdigit()]))
             p.members.add(owner)
             Activity.objects.create(task=t, actor=actor(request), kind="created", detail=f"Created and assigned to {owner.name}")
             if owner.user_id != request.user.id:
@@ -388,13 +542,29 @@ def _task_full(t):
 
 @api_view(["GET", "PATCH", "DELETE"])
 def task_detail(request, pk):
-    t = get_object_or_404(Task.objects.select_related("project", "owner"), pk=pk)
+    t = get_task(request, pk)
     if request.method == "DELETE":
+        denied = lead_only(request, "delete tasks")
+        if denied:
+            return denied
         t.delete()
         return Response(status=204)
     if request.method == "PATCH":
         d = request.data
         who = actor(request)
+        errors = {}
+        if "title" in d and not (d.get("title") or "").strip():
+            errors["title"] = "Write a short title."
+        if "priority" in d and d["priority"] not in dict(Task.PRIORITY_CHOICES):
+            errors["priority"] = "Unknown priority."
+        if "status" in d and d["status"] not in dict(Task.STATUS_CHOICES):
+            errors["status"] = "Unknown status."
+        if "estimate_hours" in d and _parse_hours(d["estimate_hours"]) == "bad":
+            errors["estimate_hours"] = "Estimate must be a number of hours between 0 and 1000."
+        if "depends_on" in d and not isinstance(d["depends_on"], list):
+            errors["depends_on"] = "depends_on must be a list of task ids."
+        if errors:
+            return Response({"detail": next(iter(errors.values())), "errors": errors}, status=400)
         if "owner" in d:
             owner = _parse_owner(t.project, d["owner"])
             if not owner:
@@ -418,13 +588,19 @@ def task_detail(request, pk):
                 Activity.objects.create(task=t, actor=who, kind="due", detail=f"Deadline moved from {t.due_date:%d %b} to {due:%d %b}")
                 t.due_date, t.due_source = due, "manual"
                 Notification.objects.filter(task=t, kind="delayed").delete()
-        for f in ("title", "description", "priority", "issue_type"):
-            if f in d:
-                setattr(t, f, d[f])
+        if "title" in d:
+            t.title = d["title"].strip()[:300]
+        if "description" in d:
+            t.description = d.get("description") or ""
+        if "priority" in d:
+            t.priority = d["priority"]
+        if (d.get("issue_type") or "").strip():
+            t.issue_type = d["issue_type"].strip()[:40]
         if "estimate_hours" in d:
-            t.estimate_hours = d["estimate_hours"] or None
+            t.estimate_hours = _parse_hours(d["estimate_hours"])
         if "depends_on" in d:
-            t.depends_on.set(Task.objects.filter(project=t.project, id__in=d["depends_on"]).exclude(id=t.id))
+            ids = [i for i in d["depends_on"] if str(i).isdigit()]
+            t.depends_on.set(Task.objects.filter(project=t.project, id__in=ids).exclude(id=t.id))
         t.updated_at = timezone.now()
         t.save()
     return Response(_task_full(t))
@@ -433,7 +609,7 @@ def task_detail(request, pk):
 @api_view(["POST"])
 def task_suggestion(request, pk):
     """Accept or dismiss the 'Suggested next action' card."""
-    t = get_object_or_404(Task.objects.select_related("project", "owner"), pk=pk)
+    t = get_task(request, pk)
     action = request.data.get("action")
     tasks, members, snap = load(t.project)
     t_loaded = next(x for x in tasks if x.id == t.id)
@@ -464,7 +640,7 @@ def task_suggestion(request, pk):
 
 @api_view(["POST"])
 def task_comments(request, pk):
-    t = get_object_or_404(Task, pk=pk)
+    t = get_task(request, pk)
     body = (request.data.get("body") or "").strip()
     if not body:
         return Response({"detail": "Write a comment."}, status=400)
@@ -474,7 +650,7 @@ def task_comments(request, pk):
 
 @api_view(["POST"])
 def task_subtasks(request, pk):
-    t = get_object_or_404(Task, pk=pk)
+    t = get_task(request, pk)
     titles = request.data.get("titles") or [request.data.get("title")]
     titles = [s.strip() for s in titles if s and s.strip()]
     if not titles:
@@ -487,6 +663,7 @@ def task_subtasks(request, pk):
 @api_view(["PATCH", "DELETE"])
 def subtask_detail(request, pk):
     s = get_object_or_404(Subtask, pk=pk)
+    get_task(request, s.task_id)
     if request.method == "DELETE":
         s.delete()
     else:
@@ -500,7 +677,7 @@ def subtask_detail(request, pk):
 
 @api_view(["POST"])
 def suggest_subtasks(request, pk):
-    t = get_object_or_404(Task, pk=pk)
+    t = get_task(request, pk)
     items, engine = ai.suggest_subtasks(t)
     return Response({"subtasks": items, "engine": engine})
 
@@ -510,7 +687,7 @@ def suggest_subtasks(request, pk):
 
 @api_view(["GET"])
 def workload_view(request, pk):
-    p = get_object_or_404(Project, pk=pk)
+    p = get_project(request, pk)
     tasks, members, snap = load(p)
     open_by_member = defaultdict(list)
     for t in sorted(tasks, key=lambda t: t.due_date):
@@ -527,7 +704,7 @@ def workload_view(request, pk):
 
 @api_view(["GET"])
 def timeline(request, pk):
-    p = get_object_or_404(Project, pk=pk)
+    p = get_project(request, pk)
     tasks, members, snap = load(p)
     ref = snap["ref"]
     start = parse_date(request.GET.get("from") or "") or ref - timedelta(days=ref.weekday())
@@ -553,7 +730,7 @@ def timeline(request, pk):
 
 @api_view(["GET"])
 def analytics(request, pk):
-    p = get_object_or_404(Project, pk=pk)
+    p = get_project(request, pk)
     tasks, members, snap = load(p)
     ref = snap["ref"]
     weeks = 12
@@ -598,7 +775,7 @@ def analytics(request, pk):
 
 @api_view(["GET", "POST", "DELETE"])
 def chat(request, pk):
-    p = get_object_or_404(Project, pk=pk)
+    p = get_project(request, pk)
     history = ChatMessage.objects.filter(project=p, user=request.user)
     if request.method == "DELETE":
         history.delete()
@@ -645,3 +822,45 @@ def notifications(request):
 @api_view(["GET"])
 def all_members(request):
     return Response([member_json(m) for m in Member.objects.filter(projects__isnull=False).distinct()])
+
+
+@api_view(["POST"])
+def project_members(request, pk):
+    """Team lead adds a teammate to the project by email or username."""
+    p = get_project(request, pk)
+    denied = lead_only(request, "add people to a project")
+    if denied:
+        return denied
+    ident = (request.data.get("email") or "").strip().lower()
+    if not ident:
+        return Response({"detail": "Write the teammate's email.", "errors": {"email": "Write an email."}}, status=400)
+    user = User.objects.filter(Q(email__iexact=ident) | Q(username__iexact=ident)).first()
+    if not user:
+        return Response({"detail": "No account with this email. Ask your teammate to create an account first.",
+                         "errors": {"email": "No account with this email."}}, status=404)
+    m = getattr(user, "member", None) or Member.objects.create(name=user.username, user=user, color=color_for(user.username))
+    p.members.add(m)
+    p.viewers.add(user)
+    return project_detail_json(p, status=201)
+
+
+@api_view(["DELETE"])
+def project_member_remove(request, pk, member_id):
+    p = get_project(request, pk)
+    denied = lead_only(request, "remove people from a project")
+    if denied:
+        return denied
+    m = get_object_or_404(p.members, pk=member_id)
+    if p.tasks.filter(owner=m).exclude(status="done").exists():
+        return Response({"detail": f"{m.name} still owns open tasks. Move them to someone else first."}, status=400)
+    p.members.remove(m)
+    if m.user_id:
+        p.viewers.remove(m.user_id)
+    return project_detail_json(p)
+
+
+def project_detail_json(p, status=200):
+    tasks, members, snap = load(p)
+    data = project_json(p, snap)
+    data["members"] = [member_json(m) for m in sorted(members.values(), key=lambda m: m.name)]
+    return Response(data, status=status)

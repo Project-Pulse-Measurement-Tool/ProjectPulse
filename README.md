@@ -1,7 +1,7 @@
 # ProjectPulse — AI-Powered Project Intelligence
 
 Working web platform for the ProjectPulse course project (KBTU, IT Project Management, 2026).
-Team: Aisha · Talshyn · Marzhan · Ayaulym · Sagynysh.
+Team: Aisha  -  Talshyn  -  Marzhan  -  Ayaulym  -  Sagynysh.
 
 Backend: **Django 5 + Django REST Framework + SQLite** (as planned in the A5 charter).
 Frontend: **React 18 + Vite**, built from the team's Figma file (Frames 12 and 13: dashboard and task page).
@@ -21,11 +21,44 @@ python backend/manage.py runserver
 Open http://127.0.0.1:8000.
 `seed_data --offline` loads only the team project. For frontend hot-reload, run `npm run dev` in `frontend/` (port 5173, proxies `/api` to Django).
 
-### Demo accounts
+### Demo accounts and roles
 
-All seeded accounts use the password `pulse2026`:
-`aisha`, `talshyn`, `marzhan`, `ayaulym`, `sagynysh` (team members) and `admin` (Django admin at `/admin/`).
-New users can register at `/register`.
+All seeded accounts use the password `pulse2026`. Sign in with the email (`aisha@example.com`, `talshyn@example.com`,
+`marzhan@example.com`, `ayaulym@example.com`, `sagynysh@example.com`) or just the username (`aisha`, …).
+`admin` opens the Django admin at `/admin/`.
+
+| Role | Who | Can |
+|---|---|---|
+| **Team lead** | `sagynysh` (and `admin`) | everything below + create projects and tasks, import from Jira, add/remove members, delete projects |
+| **Team member** | `aisha`, `talshyn`, `marzhan`, `ayaulym` | see their projects, change status/owner/deadline, subtasks, comments, AI assistant |
+
+To make another account a team lead: Django admin → **Members** → tick **Is lead**. At sign-up the "I am a" choice
+(Team lead / Team member) sets the role.
+
+Our team accounts see all seeded projects (team project + Apache Jira imports). **A new account starts with an empty
+state**: a team lead creates a project and adds teammates by email in **Project settings → Members**; a team member waits
+until a lead adds them.
+
+### Languages
+
+Personal settings → Preferences → **Language**: English, Русский, Қазақша (also on the sign-in screens).
+The whole interface is translated, including warning reasons, suggestions, the AI Daily Brief and the activity log.
+Task titles and descriptions stay as the team wrote them. The built-in AI analyst understands questions in all three
+languages and answers in English (with an `ANTHROPIC_API_KEY` set, Claude answers in the language of the question).
+
+## Screens (Figma)
+
+| Figma frame | Route |
+|---|---|
+| Sign in to ProjectPulse | `/login` (email or username, Remember me) |
+| Create your account | `/register` |
+| Project overview (Frame 12) | `/p/<id>` |
+| Task page + "Suggestion accepted" state (Frame 13) | `/tasks/<id>` |
+| Add task (empty / owner error / owner chosen) | `/p/<id>/new` |
+| Personal settings | `/p/<id>/account` (header **Settings** button) |
+| You have signed out | `/signed-out` (after **Log out**) |
+
+Pages that are not in Figma (Board, Tasks, Workload, Timeline, Analytics, AI Assistant, Project settings, Projects) use the same header, cards, pills and colours.
 
 ## Real data
 
@@ -74,15 +107,17 @@ the app falls back to the built-in analyst automatically. The badge on the AI As
 python backend/manage.py test core
 ```
 
-14 tests cover the acceptance criteria of US4, US1, US3 and US8 (including the 2-day / 3-day / passed boundary cases),
-the AI assistant answers and the "Suggested next action" reassignment.
+31 tests cover the acceptance criteria of US4, US1, US3 and US8 (including the 2-day / 3-day / passed boundary cases),
+the AI assistant answers, the "Suggested next action" reassignment, the Figma sign-in / sign-up / personal settings
+flows (email login, password rule, profile update) and input validation (bad owner, estimate, priority, workload limit) and roles (only the team lead creates tasks and
+projects and deletes projects; new accounts see no projects).
 
 ## API (all under `/api/`, token auth)
 
-`auth/login` · `auth/register` · `projects` · `projects/<id>` · `projects/<id>/dashboard` · `projects/<id>/tasks` ·
-`projects/<id>/workload` · `projects/<id>/timeline` · `projects/<id>/analytics` · `projects/<id>/chat` · `projects/<id>/brief` ·
-`projects/<id>/sync` · `jira/import` · `tasks/<id>` · `tasks/<id>/suggestion` · `tasks/<id>/subtasks` · `tasks/<id>/suggest-subtasks` ·
-`tasks/<id>/comments` · `notifications`
+`auth/login`  -  `auth/register`  -  `auth/me` (GET, PATCH for personal settings)  -  `auth/logout`  -  `projects/<id>/members` (lead adds by email)  -  `projects`  -  `projects/<id>`  -  `projects/<id>/dashboard`  -  `projects/<id>/tasks`  - 
+`projects/<id>/workload`  -  `projects/<id>/timeline`  -  `projects/<id>/analytics`  -  `projects/<id>/chat`  -  `projects/<id>/brief`  - 
+`projects/<id>/sync`  -  `jira/import`  -  `tasks/<id>`  -  `tasks/<id>/suggestion`  -  `tasks/<id>/subtasks`  -  `tasks/<id>/suggest-subtasks`  - 
+`tasks/<id>/comments`  -  `notifications`
 
 For a public deployment set `DJANGO_DEBUG=0`, `DJANGO_SECRET_KEY` and `DJANGO_ALLOWED_HOSTS`, and serve `frontend/dist`
 as static files (for example with WhiteNoise or the hosting platform's static file setting).

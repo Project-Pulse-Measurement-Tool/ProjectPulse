@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, fmtDate } from "../api.js";
 import { useProject } from "../ctx.js";
+import { useT } from "../i18n.js";
 import { Avatar, Badge, ErrorBox, Loading, Priority, STATUSES, toast } from "../ui.jsx";
 
 export function useTasks(project, version, query = "") {
@@ -14,6 +15,7 @@ export function useTasks(project, version, query = "") {
 }
 
 export default function Board() {
+  const tr = useT();
   const { project, version } = useProject();
   const [tasks, setTasks, err] = useTasks(project, version);
   const [owner, setOwner] = useState("");
@@ -46,26 +48,26 @@ export default function Board() {
     try {
       const updated = await api(`tasks/${id}`, { method: "PATCH", body: { status } });
       setTasks((cur) => cur.map((x) => (x.id === id ? { ...x, ...updated } : x)));
-      toast(`${t.key} moved to ${STATUSES.find((s) => s[0] === status)[1]}`);
+      toast(tr("{key} moved to {s}", { key: t.key, s: tr(STATUSES.find((s) => s[0] === status)[1]) }));
     } catch (e) {
       setTasks(prev);
-      toast(e.message);
+      toast(tr(e.message));
     }
   }
 
   return (
     <>
       <div className="page-head">
-        <div><h1>Board</h1><p>Drag a card to change its status. The team sees real progress without asking.</p></div>
+        <div><h1>{tr("Board")}</h1><p>{tr("Drag a card to change its status. The team sees real progress without asking.")}</p></div>
       </div>
       <div className="toolbar">
-        <input className="input" placeholder="Search tasks…" value={q} onChange={(e) => setQ(e.target.value)} />
-        <select className="input" value={owner} onChange={(e) => setOwner(e.target.value)} aria-label="Filter by owner">
-          <option value="">All owners</option>
+        <input className="input" placeholder={tr("Search tasks…")} value={q} onChange={(e) => setQ(e.target.value)} />
+        <select className="input" value={owner} onChange={(e) => setOwner(e.target.value)} aria-label={tr("Filter by owner")}>
+          <option value="">{tr("All owners")}</option>
           {owners.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
         </select>
         <label className="small" style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          <input type="checkbox" checked={hideOldDone} onChange={(e) => setHideOldDone(e.target.checked)} /> Hide Done older than 30 days
+          <input type="checkbox" checked={hideOldDone} onChange={(e) => setHideOldDone(e.target.checked)} /> {tr("Hide Done older than 30 days")}
         </label>
       </div>
       <div className="board">
@@ -78,9 +80,9 @@ export default function Board() {
               onDragOver={(e) => { e.preventDefault(); setOver(st); }}
               onDragLeave={() => setOver(null)}
               onDrop={(e) => { e.preventDefault(); setOver(null); move(Number(e.dataTransfer.getData("text/plain")), st); }}
-              aria-label={`${label} column`}
+              aria-label={tr("{s} column", { s: tr(label) })}
             >
-              <div className="col-head">{label}<span>{col.length}</span></div>
+              <div className="col-head">{tr(label)}<span>{col.length}</span></div>
               {col.slice(0, 80).map((t) => (
                 <Link
                   key={t.id}
@@ -94,9 +96,9 @@ export default function Board() {
                     if (e.key === "ArrowRight" && i < 3) { e.preventDefault(); move(t.id, STATUSES[i + 1][0]); }
                     if (e.key === "ArrowLeft" && i > 0) { e.preventDefault(); move(t.id, STATUSES[i - 1][0]); }
                   }}
-                  title="Drag to another column, or focus and press ←/→"
+                  title={tr("Drag to another column, or focus and press ←/→")}
                 >
-                  <div className="kcard-key"><span>{t.key} · {t.issue_type}</span><Priority value={t.priority} /></div>
+                  <div className="kcard-key"><span>{t.key} - {tr(t.issue_type)}</span><Priority value={t.priority} /></div>
                   <div className="kcard-title">{t.title}</div>
                   <div className="kcard-foot">
                     <span className="who small"><Avatar member={t.owner} /><span>{fmtDate(t.due_date)}</span></span>
@@ -106,7 +108,7 @@ export default function Board() {
               ))}
               {col.length > 80 && (
                 <button className="btn btn-sm btn-ghost" style={{ width: "100%" }} onClick={() => nav(`/p/${project.id}/tasks?status=${st}`)}>
-                  +{col.length - 80} more in the task list
+                  {tr("+{n} more in the task list", { n: col.length - 80 })}
                 </button>
               )}
             </section>

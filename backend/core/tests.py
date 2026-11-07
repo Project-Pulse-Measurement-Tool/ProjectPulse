@@ -16,7 +16,7 @@ class Base(TestCase):
     def setUp(self):
         self.today = timezone.localdate()
         self.user = User.objects.create_user("lead", password="secret123")
-        self.lead = Member.objects.create(name="Aisha", user=self.user)
+        self.lead = Member.objects.create(name="Aisha", user=self.user, is_lead=True)
         self.m2 = Member.objects.create(name="Marzhan")
         self.p = Project.objects.create(key="PP", name="ProjectPulse MVP", workload_limit=3)
         self.p.members.add(self.lead, self.m2)
@@ -124,3 +124,148 @@ class Assistant(Base):
         self.assertEqual(r["suggestion"]["kind"], "reassign")
         r = self.api.post(f"/api/tasks/{risky.id}/suggestion", {"action": "accept"}, format="json").json()
         self.assertEqual(r["owner"]["name"], "Aisha")
+
+
+class FigmaAuthAndAccount(Base):
+    """Sign in / Create account / Personal settings screens from the Figma file."""
+
+    def setUp(self):
+        super().setUp()
+        self.anon = APIClient()
+
+    def test_register_with_email_and_role_starts_with_no_projects(self):
+        r = self.anon.post("/api/auth/register", {"name": "Talshyn Rakhatkyzy", "email": "Talshyn@Example.com",
+                                                  "password": "secret123", "role": "Team lead"}, format="json")
+        self.assertEqual(r.status_code, 201)
+        self.assertTrue(r.json()["user"]["is_lead"])
+        u = User.objects.get(email="talshyn@example.com")
+        self.assertEqual(u.member.role, "Team lead")
+        self.assertFalse(self.p.members.filter(pk=u.member.pk).exists())
+        new = APIClient()
+        new.credentials(HTTP_AUTHORIZATION="Token " + r.json()["token"])
+        self.assertEqual(new.get("/api/projects").json(), [])
+        self.assertEqual(new.get(f"/api/projects/{self.p.id}").status_code, 404)
+
+    def test_register_password_needs_8_chars_and_a_number(self):
+        for pw in ("short1", "longpassword"):
+            r = self.anon.post("/api/auth/register", {"name": "X", "email": "x@ex.com", "password": pw}, format="json")
+            self.assertEqual(r.status_code, 400)
+            self.assertIn("password", r.json()["errors"])
+
+    def test_register_duplicate_email_is_refused(self):
+        self.user.email = "lead@ex.com"
+        self.user.save()
+        r = self.anon.post("/api/auth/register", {"name": "X", "email": "LEAD@ex.com", "password": "secret123"}, format="json")
+        self.assertEqual(r.status_code, 400)
+
+    def test_login_with_email_or_username(self):
+        self.user.email = "lead@ex.com"
+        self.user.save()
+        for ident in ("lead@ex.com", "LEAD@EX.COM", "lead"):
+            r = self.anon.post("/api/auth/login", {"email": ident, "password": "secret123"}, format="json")
+            self.assertEqual(r.status_code, 200, ident)
+        r = self.anon.post("/api/auth/login", {"email": "lead@ex.com", "password": "wrong"}, format="json")
+        self.assertEqual(r.status_code, 400)
+
+    def test_personal_settings_update_profile(self):
+        r = self.api.patch("/api/auth/me", {"name": "Aisha A.", "email": "a@ex.com", "role": "Product Owner"}, format="json")
+        self.assertEqual(r.status_code, 200)
+        self.lead.refresh_from_db()
+        self.assertEqual((self.lead.name, self.lead.role), ("Aisha A.", "Product Owner"))
+        self.assertEqual(r.json()["email"], "a@ex.com")
+
+    def test_password_change_returns_new_token(self):
+        r = self.api.patch("/api/auth/me", {"password": "newpass99"}, format="json")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("token", r.json())
+        r = self.anon.post("/api/auth/login", {"username": "lead", "password": "newpass99"}, format="json")
+        self.assertEqual(r.status_code, 200)
+
+    def test_personal_settings_rejects_bad_values(self):
+        User.objects.create_user("other", email="taken@ex.com", password="x")
+        for body in ({"email": "taken@ex.com"}, {"name": " "}, {"password": "abc"}):
+            self.assertEqual(self.api.patch("/api/auth/me", body, format="json").status_code, 400, body)
+
+
+class InputValidation(Base):
+    """Bad input gives a 400 with a message, never a server error."""
+
+    def test_owner_must_be_a_project_member(self):
+        outsider = Member.objects.create(name="Outsider")
+        for owner in ("abc", outsider.id, 999999):
+            r = self.api.post(f"/api/projects/{self.p.id}/tasks", {"title": "X", "owner": owner,
+                                                                    "due_date": str(self.today)}, format="json")
+            self.assertEqual(r.status_code, 400, owner)
+
+    def test_bad_estimate_is_refused(self):
+        r = self.api.post(f"/api/projects/{self.p.id}/tasks", {"title": "X", "owner": self.m2.id, "due_date": str(self.today),
+                                                                "estimate_hours": "abc"}, format="json")
+        self.assertEqual(r.status_code, 400)
+
+    def test_patch_rejects_unknown_priority_status_and_empty_title(self):
+        t = self.task("T1")
+        for body in ({"priority": "zzz"}, {"status": "zzz"}, {"title": "  "}):
+            self.assertEqual(self.api.patch(f"/api/tasks/{t.id}", body, format="json").status_code, 400, body)
+        t.refresh_from_db()
+        self.assertEqual(t.priority, "medium")
+
+    def test_project_workload_limit_must_be_1_to_50(self):
+        for v in ("abc", 0, 99):
+            self.assertEqual(self.api.patch(f"/api/projects/{self.p.id}", {"workload_limit": v}, format="json").status_code, 400)
+        r = self.api.patch(f"/api/projects/{self.p.id}", {"workload_limit": "4"}, format="json")
+        self.assertEqual(r.json()["workload_limit"], 4)
+
+
+class Roles(Base):
+    """Only the team lead creates tasks and projects and deletes projects; new accounts see nothing."""
+
+    def setUp(self):
+        super().setUp()
+        self.mu = User.objects.create_user("member", password="secret123")
+        self.mm = Member.objects.create(name="Talshyn", user=self.mu, role="Team member")
+        self.p.members.add(self.mm)
+        self.member_api = APIClient()
+        self.member_api.credentials(HTTP_AUTHORIZATION="Token " + Token.objects.create(user=self.mu).key)
+
+    def test_member_cannot_create_task(self):
+        r = self.member_api.post(f"/api/projects/{self.p.id}/tasks", {"title": "X", "owner": self.mm.id,
+                                                                       "due_date": str(self.today)}, format="json")
+        self.assertEqual(r.status_code, 403)
+        self.assertFalse(Task.objects.filter(title="X").exists())
+
+    def test_member_cannot_delete_project_or_task_but_lead_can(self):
+        t = self.task("T1")
+        self.assertEqual(self.member_api.delete(f"/api/tasks/{t.id}").status_code, 403)
+        self.assertEqual(self.member_api.delete(f"/api/projects/{self.p.id}").status_code, 403)
+        self.assertTrue(Project.objects.filter(pk=self.p.id).exists())
+        self.assertEqual(self.api.delete(f"/api/projects/{self.p.id}").status_code, 204)
+
+    def test_member_can_still_update_their_task_status(self):
+        t = self.task("T1", owner=self.mm)
+        r = self.member_api.patch(f"/api/tasks/{t.id}", {"status": "in_progress"}, format="json")
+        self.assertEqual(r.status_code, 200)
+
+    def test_member_cannot_create_project(self):
+        r = self.member_api.post("/api/projects", {"key": "WEB", "name": "Web"}, format="json")
+        self.assertEqual(r.status_code, 403)
+
+    def test_lead_creates_project_and_adds_member_by_email(self):
+        r = self.api.post("/api/projects", {"key": "WEB", "name": "Web"}, format="json")
+        self.assertEqual(r.status_code, 201)
+        pid = r.json()["id"]
+        self.assertEqual(self.member_api.get(f"/api/projects/{pid}").status_code, 404)
+        self.mu.email = "member@ex.com"
+        self.mu.save()
+        r = self.api.post(f"/api/projects/{pid}/members", {"email": "member@ex.com"}, format="json")
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(self.member_api.get(f"/api/projects/{pid}").status_code, 200)
+        self.assertEqual(self.member_api.post(f"/api/projects/{pid}/members", {"email": "lead"}, format="json").status_code, 403)
+
+    def test_projects_list_only_shows_visible_projects(self):
+        hidden = Project.objects.create(key="HID", name="Hidden")
+        keys = [p["key"] for p in self.member_api.get("/api/projects").json()]
+        self.assertIn("PP", keys)
+        self.assertNotIn("HID", keys)
+        t = Task.objects.create(project=hidden, key="H1", title="h", owner=self.m2, due_date=self.today,
+                                created_at=timezone.now(), updated_at=timezone.now())
+        self.assertEqual(self.member_api.get(f"/api/tasks/{t.id}").status_code, 404)

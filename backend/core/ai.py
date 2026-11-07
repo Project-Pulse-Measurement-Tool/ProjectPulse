@@ -124,7 +124,7 @@ def analyst_answer(question, project, tasks, snap, members):
                 head += f", above the limit of {project.workload_limit}"
             return head + ":\n" + "\n".join("- " + _fmt_task(t, sig[t.id], members) for t in sorted(mine, key=lambda t: t.due_date)[:10])
 
-    if _has(q, "overload", "workload", "busy", "capacity", "загруж", "перегруж", "нагруз", "who has", "free"):
+    if _has(q, "overload", "workload", "busy", "capacity", "загруж", "перегруж", "нагруз", "жүктеме", "жүктел", "who has", "free"):
         over = [r for r in snap["workload"] if r["above_limit"]]
         free = [r for r in snap["workload"] if r["open"] < project.workload_limit]
         lines = []
@@ -137,7 +137,7 @@ def analyst_answer(question, project, tasks, snap, members):
             lines.append("Has capacity: " + ", ".join(f"{r['name']} ({r['open']})" for r in free[:6]) + ".")
         return "\n".join(lines)
 
-    if _has(q, "behind", "late", "delay", "why", "overdue", "отста", "почему", "просроч", "задерж"):
+    if _has(q, "behind", "late", "delay", "why", "overdue", "отста", "почему", "просроч", "задерж", "кешік", "неге", "артта"):
         if not delayed and not risky:
             return f"Nothing is behind schedule: no delayed or at-risk tasks among {len(open_tasks)} open tasks."
         lines = [f"{len(delayed)} task{'s are' if len(delayed) != 1 else ' is'} delayed and {len(risky)} at risk."]
@@ -160,8 +160,8 @@ def analyst_answer(question, project, tasks, snap, members):
             lines += ["- " + _fmt_task(t, sig[t.id], members) for t in risky[:3]]
         return "\n".join(lines)
 
-    if _has(q, "this week", "deadline", "due", "week", "дедлайн", "недел", "срок", "today", "сегодня"):
-        horizon = 1 if _has(q, "today", "сегодня") else 7
+    if _has(q, "this week", "deadline", "due", "week", "дедлайн", "недел", "срок", "today", "сегодня", "апта", "мерзім", "бүгін"):
+        horizon = 1 if _has(q, "today", "сегодня", "бүгін") else 7
         due = sorted([t for t in open_tasks if ref <= t.due_date <= ref + timedelta(days=horizon)], key=lambda t: t.due_date)
         if not due:
             return f"No open tasks are due in the next {horizon} day{'s' if horizon != 1 else ''}."
@@ -169,17 +169,17 @@ def analyst_answer(question, project, tasks, snap, members):
             "- " + _fmt_task(t, sig[t.id], members) for t in due[:12]
         )
 
-    if _has(q, "health", "on track", "status", "progress", "здоров", "прогресс", "статус", "как дела", "summary", "brief", "итог", "сводк"):
+    if _has(q, "health", "on track", "status", "progress", "здоров", "прогресс", "статус", "как дела", "summary", "brief", "итог", "сводк", "денсаулық", "қорытынд", "жағдай"):
         b = rules.daily_brief(project, tasks, snap, members)
         return "\n".join([f"**{b['headline']}**"] + [f"- {x}" for x in b["bullets"]] + ([b["focus"]] if b["focus"] else []))
 
-    if _has(q, "what should", "focus", "priorit", "next", "что делать", "приоритет", "сначала", "recommend"):
+    if _has(q, "what should", "focus", "priorit", "next", "что делать", "приоритет", "сначала", "не істеу", "басымдық", "назар", "recommend"):
         pick = sorted(open_tasks, key=lambda t: ({"delayed": 0, "due_today": 1, "at_risk": 2}.get(sig[t.id]["state"], 3), -rules.PRIORITY_WEIGHT[t.priority], t.due_date))[:5]
         if not pick:
             return "All tasks are done."
         return "Suggested focus, most urgent first:\n" + "\n".join("- " + _fmt_task(t, sig[t.id], members) for t in pick)
 
-    if _has(q, "block", "depend", "блок", "завис"):
+    if _has(q, "block", "depend", "блок", "завис", "тәуелді", "бөгел"):
         blocked = [t for t in open_tasks if any(d.status != "done" for d in t.depends_on.all())]
         if not blocked:
             return "No open task is waiting on an unfinished dependency."

@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { fmtDate, relDays } from "../api.js";
 import { useProject } from "../ctx.js";
+import { useT } from "../i18n.js";
 import { Badge, ErrorBox, Loading, Priority, STATUSES, Who } from "../ui.jsx";
 import { useTasks } from "./Board.jsx";
 
@@ -15,6 +16,7 @@ const SIGNALS = [
 ];
 
 export default function TaskList() {
+  const tr = useT();
   const { project, version } = useProject();
   const [sp, setSp] = useSearchParams();
   const params = Object.fromEntries(sp.entries());
@@ -32,57 +34,57 @@ export default function TaskList() {
   return (
     <>
       <div className="page-head">
-        <div><h1>Tasks</h1><p>Warnings show the reason. A task past its deadline that is not Done is labelled “Delayed”.</p></div>
+        <div><h1>{tr("Tasks")}</h1><p>{tr("Warnings show the reason. A task past its deadline that is not Done is labelled “Delayed”.")}</p></div>
       </div>
       <div className="toolbar">
-        <div className="seg" role="group" aria-label="Signal filter">
+        <div className="seg" role="group" aria-label={tr("Signal filter")}>
           {SIGNALS.map(([v, l]) => (
-            <button key={l} className={(params.signal || "") === v ? "on" : ""} onClick={() => set("signal", v)}>{l}</button>
+            <button key={l} className={(params.signal || "") === v ? "on" : ""} onClick={() => set("signal", v)}>{tr(l)}</button>
           ))}
         </div>
-        <input className="input" placeholder="Search…" value={params.q || ""} onChange={(e) => set("q", e.target.value)} />
-        <select className="input" value={params.status || ""} onChange={(e) => set("status", e.target.value)} aria-label="Status">
-          <option value="">Any status</option>
-          {STATUSES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        <input className="input" placeholder={tr("Search…")} value={params.q || ""} onChange={(e) => set("q", e.target.value)} />
+        <select className="input" value={params.status || ""} onChange={(e) => set("status", e.target.value)} aria-label={tr("Status")}>
+          <option value="">{tr("Any status")}</option>
+          {STATUSES.map(([v, l]) => <option key={v} value={v}>{tr(l)}</option>)}
         </select>
-        <select className="input" value={params.owner || ""} onChange={(e) => set("owner", e.target.value)} aria-label="Owner">
-          <option value="">Any owner</option>
+        <select className="input" value={params.owner || ""} onChange={(e) => set("owner", e.target.value)} aria-label={tr("Owner")}>
+          <option value="">{tr("Any owner")}</option>
           {project.members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
         </select>
-        <select className="input" value={params.ordering || "risk"} onChange={(e) => set("ordering", e.target.value)} aria-label="Sort">
-          <option value="risk">Sort: risk first</option>
-          <option value="due">Sort: deadline</option>
-          <option value="priority">Sort: priority</option>
-          <option value="updated">Sort: recently updated</option>
+        <select className="input" value={params.ordering || "risk"} onChange={(e) => set("ordering", e.target.value)} aria-label={tr("Sort")}>
+          <option value="risk">{tr("Sort: risk first")}</option>
+          <option value="due">{tr("Sort: deadline")}</option>
+          <option value="priority">{tr("Sort: priority")}</option>
+          <option value="updated">{tr("Sort: recently updated")}</option>
         </select>
       </div>
       <div className="card" style={{ padding: "8px 12px" }}>
         <ErrorBox error={err} />
-        {!tasks ? <Loading /> : shown.length === 0 ? <div className="empty">No tasks match these filters.</div> : (
+        {!tasks ? <Loading /> : shown.length === 0 ? <div className="empty">{tr("No tasks match these filters.")}</div> : (
           <div className="table-wrap">
             <table className="table">
-              <thead><tr><th>Key</th><th>Title</th><th>Owner</th><th>Status</th><th>Priority</th><th>Deadline</th><th>Warning</th></tr></thead>
+              <thead><tr><th>{tr("Key")}</th><th>{tr("Title")}</th><th>{tr("Owner")}</th><th>{tr("Status")}</th><th>{tr("Priority")}</th><th>{tr("Deadline")}</th><th>{tr("Warning")}</th></tr></thead>
               <tbody>
                 {shown.slice(0, 400).map((t) => (
                   <tr key={t.id}>
                     <td className="small muted" style={{ whiteSpace: "nowrap" }}>{t.key}</td>
                     <td>
                       <Link to={`/tasks/${t.id}`} className="t-title">{t.title}</Link>
-                      {t.signal.reasons.length > 0 && <div className="small muted">{t.signal.reasons[0]}</div>}
+                      {t.signal.reasons.length > 0 && <div className="small muted">{tr(t.signal.reasons[0])}</div>}
                     </td>
                     <td><Who member={t.owner} /></td>
-                    <td className="small">{t.status_label}</td>
+                    <td className="small">{tr(t.status_label)}</td>
                     <td><Priority value={t.priority} /></td>
                     <td className="small" style={{ whiteSpace: "nowrap" }}>
                       <b>{fmtDate(t.due_date)}</b>
-                      <div className="muted">{t.status !== "done" ? relDays(t.signal.days_left) : ""}{t.due_source === "estimated" ? " · est." : ""}</div>
+                      <div className="muted">{t.status !== "done" ? relDays(t.signal.days_left) : ""}{t.due_source === "estimated" ? " - " + tr("est.") : ""}</div>
                     </td>
                     <td><Badge signal={t.signal} /></td>
                   </tr>
                 ))}
               </tbody>
             </table>
-            {shown.length > 400 && <div className="empty small">Showing 400 of {shown.length}. Narrow the filters to see the rest.</div>}
+            {shown.length > 400 && <div className="empty small">{tr("Showing 400 of {n}. Narrow the filters to see the rest.", { n: shown.length })}</div>}
           </div>
         )}
       </div>
