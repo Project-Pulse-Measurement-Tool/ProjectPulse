@@ -34,7 +34,7 @@ function Subtasks({ task, onChange }) {
       ))}
       {ideas && (
         <div style={{ background: "#f6f3fe", borderRadius: 12, padding: 12, margin: "10px 0" }}>
-          <div className="small" style={{ fontWeight: 800, marginBottom: 6 }}>{Icon.spark} {tr("Suggested subtasks")} <span className="muted">({ideas.engine === "claude" ? "Claude" : tr("built-in")})</span></div>
+          <div className="small" style={{ fontWeight: 800, marginBottom: 6 }}>{Icon.spark} {tr("Suggested subtasks")} <span className="muted">({ideas.engine === "gemini" ? "Gemini" : ideas.engine === "claude" ? "Claude" : tr("built-in")})</span></div>
           <ul style={{ margin: "0 0 10px", paddingLeft: 18, fontSize: 13 }}>{ideas.subtasks.map((s, i) => <li key={i}>{s}</li>)}</ul>
           <div className="btn-row">
             <button className="btn btn-primary btn-sm" onClick={async () => { await add(ideas.subtasks, true); setIdeas(null); toast(tr("Subtasks added")); }}>{tr("Accept all")}</button>

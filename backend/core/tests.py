@@ -126,6 +126,107 @@ class Assistant(Base):
         self.assertEqual(r["owner"]["name"], "Aisha")
 
 
+class GeminiAssistant(Base):
+    def test_gemini_chosen_when_key_present(self):
+        self.task("G1")
+        with mock.patch.object(ai, "gemini_available", return_value=True), \
+             mock.patch.object(ai, "ask_gemini", return_value="Gemini answer about the project"):
+            r = self.api.post(f"/api/projects/{self.p.id}/chat", {"message": "Status?"}, format="json")
+            self.assertEqual(r.status_code, 200)
+            data = r.json()
+            self.assertEqual(data["engine"], "gemini")
+            reply = data["messages"][-1]
+            self.assertEqual(reply["engine"], "gemini")
+            self.assertEqual(reply["content"], "Gemini answer about the project")
+
+    def test_gemini_fallback_to_claude_on_exception(self):
+        with mock.patch.object(ai, "gemini_available", return_value=True), \
+             mock.patch.object(ai, "ask_gemini", side_effect=RuntimeError("429 Resource has been exhausted")), \
+             mock.patch.object(ai, "claude_available", return_value=True), \
+             mock.patch.object(ai, "ask_claude", return_value="Claude fallback response"):
+            r = self.api.post(f"/api/projects/{self.p.id}/chat", {"message": "Any blockers?"}, format="json")
+            self.assertEqual(r.status_code, 200)
+            data = r.json()
+            self.assertEqual(data["engine"], "claude")
+            reply = data["messages"][-1]
+            self.assertEqual(reply["engine"], "claude")
+            self.assertEqual(reply["content"], "Claude fallback response")
+
+    def test_gemini_fallback_to_analyst_on_exception(self):
+        self.task("T10", days=-2)
+        with mock.patch.object(ai, "gemini_available", return_value=True), \
+             mock.patch.object(ai, "ask_gemini", side_effect=Exception("Connection timeout")), \
+             mock.patch.object(ai, "claude_available", return_value=False):
+            r = self.api.post(f"/api/projects/{self.p.id}/chat", {"message": "Почему мы отстаём?"}, format="json")
+            self.assertEqual(r.status_code, 200)
+            data = r.json()
+            self.assertEqual(data["engine"], "analyst")
+            reply = data["messages"][-1]
+            self.assertEqual(reply["engine"], "analyst")
+            self.assertIn("T10", reply["content"])
+
+    def test_suggest_subtasks_gemini_json_with_fences(self):
+        t = self.task("S1", issue_type="story")
+        gemini_response = (
+            "```json\n"
+            "{\n"
+            '  "subtasks": [\n'
+            '    "Create user model and migration",\n'
+            '    "Write registration API view",\n'
+            '    "Add email validation tests"\n'
+            "  ]\n"
+            "}\n"
+            "```"
+        )
+        with mock.patch.object(ai, "gemini_available", return_value=True), \
+             mock.patch.object(ai, "ask_gemini", return_value=gemini_response):
+            r = self.api.post(f"/api/tasks/{t.id}/suggest-subtasks", format="json")
+            self.assertEqual(r.status_code, 200)
+            data = r.json()
+            self.assertEqual(data["engine"], "gemini")
+            self.assertEqual(data["subtasks"], [
+                "Create user model and migration",
+                "Write registration API view",
+                "Add email validation tests",
+            ])
+
+    def test_suggest_subtasks_fallback_on_gemini_error(self):
+        t = self.task("B1", issue_type="bug")
+        with mock.patch.object(ai, "gemini_available", return_value=True), \
+             mock.patch.object(ai, "ask_gemini", side_effect=Exception("Gemini quota exceeded")), \
+             mock.patch.object(ai, "claude_available", return_value=False):
+            items, engine = ai.suggest_subtasks(t)
+            self.assertEqual(engine, "analyst")
+            self.assertIn("Fix the root cause", items)
+
+    def test_suggest_subtasks_fallback_on_malformed_json(self):
+        t = self.task("B2", issue_type="bug")
+        with mock.patch.object(ai, "gemini_available", return_value=True), \
+             mock.patch.object(ai, "ask_gemini", return_value="Here are the tasks: 1. test, 2. fix"), \
+             mock.patch.object(ai, "claude_available", return_value=False):
+            items, engine = ai.suggest_subtasks(t)
+            self.assertEqual(engine, "analyst")
+            self.assertIn("Fix the root cause", items)
+
+    def test_gemini_empty_response_falls_back(self):
+        self.task("T11")
+        with mock.patch.object(ai, "gemini_available", return_value=True), \
+             mock.patch.object(ai, "ask_gemini", return_value=None), \
+             mock.patch.object(ai, "claude_available", return_value=False):
+            r = self.api.post(f"/api/projects/{self.p.id}/chat", {"message": "Who is overloaded?"}, format="json")
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual(r.json()["engine"], "analyst")
+
+    def test_suggest_subtasks_empty_response_falls_back(self):
+        t = self.task("B3", issue_type="bug")
+        with mock.patch.object(ai, "gemini_available", return_value=True), \
+             mock.patch.object(ai, "ask_gemini", return_value=""), \
+             mock.patch.object(ai, "claude_available", return_value=False):
+            items, engine = ai.suggest_subtasks(t)
+            self.assertEqual(engine, "analyst")
+            self.assertIn("Fix the root cause", items)
+
+
 class FigmaAuthAndAccount(Base):
     """Sign in / Create account / Personal settings screens from the Figma file."""
 

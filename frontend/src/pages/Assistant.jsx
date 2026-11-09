@@ -52,8 +52,8 @@ export default function Assistant() {
           <p>{t("Ask anything about {name}. Answers come from the live task data.", { name: project.name })}</p>
         </div>
         <div className="btn-row">
-          <span className={`badge ${data?.engine === "claude" ? "badge-ai" : "badge-soft"}`}>
-            {Icon.spark} {data?.engine === "claude" ? "Claude API" : t("Built-in analyst (no API key set)")}
+          <span className={`badge ${data?.engine === "gemini" || data?.engine === "claude" ? "badge-ai" : "badge-soft"}`}>
+            {Icon.spark} {data?.engine === "gemini" ? t("Gemini") : data?.engine === "claude" ? t("Claude") : t("Built-in")}
           </span>
           {data?.messages.length > 0 && (
             <button className="btn btn-sm btn-ghost" onClick={async () => { await api(`projects/${project.id}/chat`, { method: "DELETE" }); setData({ ...data, messages: [] }); }}>{t("Clear chat")}</button>
@@ -71,7 +71,7 @@ export default function Assistant() {
           {data?.messages.map((m) => (
             <div key={m.id} className={`msg msg-${m.role}`}>
               {m.role === "assistant" ? <RichText text={m.content} /> : m.content}
-              <div className="msg-meta">{fmtDateTime(m.created_at)}{m.role === "assistant" && ` - ${m.engine === "claude" ? "Claude" : t("built-in analyst")}`}</div>
+              <div className="msg-meta">{fmtDateTime(m.created_at)}{m.role === "assistant" && ` - ${m.engine === "gemini" ? t("Gemini") : m.engine === "claude" ? t("Claude") : t("built-in analyst")}`}</div>
             </div>
           ))}
           {pending && (

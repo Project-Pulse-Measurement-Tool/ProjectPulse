@@ -1,6 +1,7 @@
 """AI Project Assistant: chat over live task data (F7), AI subtask suggestions (F4).
 
-Two engines:
+Three engines:
+- "gemini": Google Gemini API (free tier), used when GEMINI_API_KEY is set.
 - "claude": the Claude API, used when ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) is set.
 - "analyst": a built-in engine that answers the common PM questions directly from the database.
   It needs no key and costs nothing, which matches the zero cash budget of the pilot (A5, NC2).
@@ -16,6 +17,12 @@ from . import rules
 log = logging.getLogger(__name__)
 
 MODEL = os.environ.get("PP_CLAUDE_MODEL", "claude-opus-5-5")
+CLAUDE_MODEL = MODEL
+GEMINI_MODEL = os.environ.get("PP_GEMINI_MODEL", "gemini-3.8-flash")
+
+
+def gemini_available():
+    return bool(os.environ.get("GEMINI_API_KEY"))
 
 
 def claude_available():
@@ -23,7 +30,19 @@ def claude_available():
 
 
 def engine_name():
-    return "claude" if claude_available() else "analyst"
+    if gemini_available():
+        return "gemini"
+    if claude_available():
+        return "claude"
+    return "analyst"
+
+
+def active_model():
+    if gemini_available():
+        return GEMINI_MODEL
+    if claude_available():
+        return CLAUDE_MODEL
+    return None
 
 
 # ---------------------------------------------------------------- context
@@ -59,7 +78,38 @@ def project_context(project, tasks, snap, members, max_tasks=220):
 SYSTEM_PROMPT = """You are the ProjectPulse AI Project Assistant inside a project management platform.
 You answer project managers' questions using only the live project data given in the user turn.
 Be short, specific and honest: name task keys, owners and dates. If the data does not answer the question, say so.
-Use plain sentences or a short bulleted list. Reply in the language the user wrote in."""
+Use plain sentences or a short bulleted list. Reply in the language the user wrote in (English, Russian, Kazakh). Отвечай на языке вопроса пользователя (английский, русский, казахский)."""
+
+
+def ask_gemini(system_prompt, user_prompt):
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return None
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=api_key)
+    config = types.GenerateContentConfig(
+        system_instruction=system_prompt,
+    ) if system_prompt else None
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=user_prompt,
+        config=config,
+    )
+    if not response or not response.text:
+        return None
+    return response.text.strip() or None
+
+
+def clean_json_text(text):
+    if not text:
+        return ""
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text)
+    return text.strip()
 
 
 def ask_claude(question, context, history):
@@ -202,13 +252,33 @@ def analyst_answer(question, project, tasks, snap, members):
 
 
 def answer(question, project, tasks, snap, members, history):
+    if gemini_available():
+        try:
+            log.info("Requesting answer from Gemini API (model: %s)", GEMINI_MODEL)
+            context = project_context(project, tasks, snap, members)
+            parts = []
+            if history:
+                recent = history[-6:]
+                history_str = "\n".join(f"{m.role.capitalize()}: {m.content}" for m in recent)
+                parts.append(f"Conversation history:\n{history_str}\n")
+            parts.append(f"<project_data>\n{context}\n</project_data>\n\nQuestion: {question}")
+            user_prompt = "\n".join(parts)
+            text = ask_gemini(SYSTEM_PROMPT, user_prompt)
+            if text:
+                return text, "gemini"
+            log.warning("Gemini API call returned empty response, falling back")
+        except Exception as exc:
+            log.warning("Gemini API call failed, falling back: %s", exc)
+
     if claude_available():
         try:
+            log.info("Requesting answer from Claude API (model: %s)", CLAUDE_MODEL)
             text = ask_claude(question, project_context(project, tasks, snap, members), history)
             if text:
                 return text, "claude"
         except Exception as exc:  # network, auth or rate limit: fall back to the built-in engine
             log.warning("Claude API call failed, using built-in analyst: %s", exc)
+    log.info("Using built-in analyst engine")
     return analyst_answer(question, project, tasks, snap, members), "analyst"
 
 
@@ -225,6 +295,31 @@ TEMPLATES = {
 
 
 def suggest_subtasks(task):
+    if gemini_available():
+        try:
+            log.info("Suggesting subtasks with Gemini API (model: %s)", GEMINI_MODEL)
+            system_prompt = (
+                "You are a project management assistant that generates concrete subtasks. "
+                "Return ONLY a valid JSON object in the format: {\"subtasks\": [\"task 1\", \"task 2\", ...]}. "
+                "Do not include markdown code blocks, backticks, or any other text. "
+                "Reply in the language of the task title and description (English, Russian or Kazakh)."
+            )
+            user_prompt = (
+                "Suggest 3-6 short, concrete subtasks (each under 12 words) for this task.\n"
+                f"Type: {task.issue_type}\nTitle: {task.title}\nDescription: {task.description[:2000]}\n\n"
+                "Return only JSON: {\"subtasks\": [\"...\"]}"
+            )
+            raw = ask_gemini(system_prompt, user_prompt)
+            if raw:
+                cleaned = clean_json_text(raw)
+                data = json.loads(cleaned)
+                items = [s.strip() for s in data.get("subtasks", []) if isinstance(s, str) and s.strip()]
+                if items:
+                    return items[:6], "gemini"
+            log.warning("Gemini subtask suggestion returned empty or invalid response, falling back")
+        except Exception as exc:
+            log.warning("Gemini subtask suggestion failed, falling back: %s", exc)
+
     if claude_available():
         try:
             import anthropic

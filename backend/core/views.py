@@ -780,19 +780,25 @@ def chat(request, pk):
     if request.method == "DELETE":
         history.delete()
         return Response(status=204)
+    used_engine = None
     if request.method == "POST":
         question = (request.data.get("message") or "").strip()
         if not question:
             return Response({"detail": "Ask a question."}, status=400)
         tasks, members, snap = load(p)
         past = list(history)
-        text, engine = ai.answer(question, p, tasks, snap, members, past)
+        text, used_engine = ai.answer(question, p, tasks, snap, members, past)
         ChatMessage.objects.create(project=p, user=request.user, role="user", content=question[:4000])
-        ChatMessage.objects.create(project=p, user=request.user, role="assistant", content=text, engine=engine)
+        ChatMessage.objects.create(project=p, user=request.user, role="assistant", content=text, engine=used_engine)
         history = ChatMessage.objects.filter(project=p, user=request.user)
+
+    if not used_engine:
+        last_assistant = history.filter(role="assistant").last()
+        used_engine = last_assistant.engine if last_assistant else ai.engine_name()
+
     return Response(
         {
-            "engine": ai.engine_name(),
+            "engine": used_engine,
             "messages": [{"id": m.id, "role": m.role, "content": m.content, "engine": m.engine, "created_at": m.created_at.isoformat()} for m in history],
         }
     )
@@ -800,7 +806,7 @@ def chat(request, pk):
 
 @api_view(["GET"])
 def ai_status(request):
-    return Response({"engine": ai.engine_name(), "model": ai.MODEL if ai.claude_available() else None})
+    return Response({"engine": ai.engine_name(), "model": ai.active_model()})
 
 
 @api_view(["GET", "POST"])

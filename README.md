@@ -44,7 +44,7 @@ until a lead adds them.
 Personal settings → Preferences → **Language**: English, Русский, Қазақша (also on the sign-in screens).
 The whole interface is translated, including warning reasons, suggestions, the AI Daily Brief and the activity log.
 Task titles and descriptions stay as the team wrote them. The built-in AI analyst understands questions in all three
-languages and answers in English (with an `ANTHROPIC_API_KEY` set, Claude answers in the language of the question).
+languages and answers in English (with `GEMINI_API_KEY` or `ANTHROPIC_API_KEY` set, the AI engine answers in the language of the question).
 
 ## Screens (Figma)
 
@@ -92,14 +92,32 @@ The "created per week" chart only covers the imported window (issues updated in 
 ## AI engine
 
 Without configuration the assistant runs a built-in analyst that answers directly from the database — free, matching the
-zero cash budget of the pilot. To use Claude instead, set an API key before starting the server:
+zero cash budget of the pilot.
 
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...      # PowerShell: $env:ANTHROPIC_API_KEY="sk-ant-..."
-```
+You can configure external LLM engines using environment variables:
 
-Chat answers and subtask suggestions then go to `claude-opus-5-5` (override with `PP_CLAUDE_MODEL`). If the API call fails,
-the app falls back to the built-in analyst automatically. The badge on the AI Assistant page shows which engine is active.
+1. **Google Gemini (free tier)**:
+   Get a free API key from [Google AI Studio](https://aistudio.google.com/):
+   ```bash
+   export GEMINI_API_KEY=AIzaSy...              # PowerShell: $env:GEMINI_API_KEY="AIzaSy..."
+   export PP_GEMINI_MODEL=gemini-3.8-flash      # PowerShell: $env:PP_GEMINI_MODEL="gemini-3.8-flash" (optional, default is gemini-3.8-flash; e.g. gemini-2.0-flash)
+   ```
+   *Note on Gemini free tier*: on the free tier, requests may be used by Google to improve products and services, and rate limits are small (RPM limits). Therefore, do not send confidential or production-sensitive data through the free tier key.
+
+2. **Anthropic Claude**:
+   ```bash
+   export ANTHROPIC_API_KEY=sk-ant-...          # PowerShell: $env:ANTHROPIC_API_KEY="sk-ant-..."
+   export PP_CLAUDE_MODEL=claude-opus-5-5       # PowerShell: $env:PP_CLAUDE_MODEL="claude-opus-5-5"
+   ```
+
+### Engine priority and fallback
+
+The engine is chosen in the following priority order:
+**Gemini** (if `GEMINI_API_KEY` is set) → **Claude** (if `ANTHROPIC_API_KEY` is set) → **Built-in analyst**.
+
+If an API call fails (HTTP 429 rate limit, 503 high demand, network error, timeout, or empty response), the application logs a warning and quietly falls back to the next engine in line. The user always receives an answer.
+
+The badge on the AI Assistant page and task subtasks dynamically reflects the engine that was actually used: **Gemini**, **Claude**, or **Built-in**.
 
 ## Tests
 
@@ -107,8 +125,9 @@ the app falls back to the built-in analyst automatically. The badge on the AI As
 python backend/manage.py test core
 ```
 
-31 tests cover the acceptance criteria of US4, US1, US3 and US8 (including the 2-day / 3-day / passed boundary cases),
-the AI assistant answers, the "Suggested next action" reassignment, the Figma sign-in / sign-up / personal settings
+39 tests cover the acceptance criteria of US4, US1, US3 and US8 (including the 2-day / 3-day / passed boundary cases),
+the Gemini and Claude AI assistant answers and subtask suggestions (including fallback scenarios and JSON code fence stripping),
+the "Suggested next action" reassignment, the Figma sign-in / sign-up / personal settings
 flows (email login, password rule, profile update) and input validation (bad owner, estimate, priority, workload limit) and roles (only the team lead creates tasks and
 projects and deletes projects; new accounts see no projects).
 
